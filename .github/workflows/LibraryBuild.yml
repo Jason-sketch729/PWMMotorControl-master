@@ -1,0 +1,106 @@
+# LibraryBuild.yml
+# Github workflow script to test compile all examples of an Arduino library repository.
+#
+# Copyright (C) 2020-2024  Armin Joachimsmeyer
+# https://github.com/ArminJo/Github-Actions
+#
+
+# This is the name of the workflow, visible on GitHub UI.
+name: LibraryBuild
+on:
+  workflow_dispatch: # To run it manually
+    description: 'manual build check'
+  push: # see: https://help.github.com/en/actions/reference/events-that-trigger-workflows#pull-request-event-pull_request
+    paths:
+      - '**.ino'
+      - '**.cpp'
+      - '**.hpp'
+      - '**.h'
+      - '**LibraryBuild.yml'
+  pull_request:
+
+jobs:
+  build:
+    name: ${{ matrix.arduino-boards-fqbn }} - test compiling examples
+
+    runs-on: ubuntu-latest # I picked Ubuntu to use shell scripts. As of 15.9.22 it is ubuntu-20.04.
+
+    env:
+      # Comma separated list without double quotes around the list.
+      REQUIRED_LIBRARIES: Servo,ServoEasing,Adafruit Motor Shield V2 Library,PlayRtttl # ,BlueDisplay
+
+    strategy:
+      matrix:
+        # The matrix will produce one job for each configuration parameter of type `arduino-boards-fqbn`
+        # In the Arduino IDE, the fqbn is printed in the first line of the verbose output for compilation as parameter -fqbn=... for the "arduino-builder -dump-prefs" command
+        #
+        # Examples: arduino:avr:uno, arduino:avr:leonardo, arduino:avr:nano, arduino:avr:mega
+        # arduino:sam:arduino_due_x, arduino:samd:arduino_zero_native"
+        # ATTinyCore:avr:attinyx5:chip=85,clock=1internal, digistump:avr:digispark-tiny, digistump:avr:digispark-pro
+        # STMicroelectronics:stm32:GenF1:pnum=BLUEPILL_F103C8
+        # esp8266:esp8266:huzzah:eesz=4M3M,xtal=80, esp32:esp32:featheresp32:FlashFreq=80
+        # You may add a suffix behind the fqbn with "|" to specify one board for e.g. different compile options like arduino:avr:uno|trace
+        #############################################################################################################
+        arduino-boards-fqbn:
+          - arduino:avr:uno
+          - arduino:avr:uno|full
+          - esp32:esp32:esp32cam
+
+        # Specify parameters for each board.
+        # With sketches-exclude you may exclude specific examples for a board. Use a comma separated list.
+        #############################################################################################################
+        include:
+          - arduino-boards-fqbn: arduino:avr:uno
+            build-properties: # the flags were put in compiler.cpp.extra_flags
+              SmartCarFollower: -DMOTOR_SHIELD_2WD_BASIC_CONFIGURATION
+              RobotCarBlueDisplay:
+                -DBREADBOARD_4WD_FULL_CONFIGURATION
+
+          - arduino-boards-fqbn: arduino:avr:uno|full
+            build-properties: # the flags were put in compiler.cpp.extra_flags
+              Start: -DUSE_ADAFRUIT_MOTOR_SHIELD -DDO_NOT_SUPPORT_RAMP -DTRACE -DDEBUG
+              Square: -DCAR_HAS_4_WHEELS -DUSE_ADAFRUIT_MOTOR_SHIELD -DDO_NOT_SUPPORT_RAMP -DTRACE
+              PrintMotorDiagram: -DUSE_CAR_PWM_CONTROL_INSTEAD_OF_ENCODER_MOTOR -DUSE_ADAFRUIT_MOTOR_SHIELD -DDO_NOT_SUPPORT_RAMP -DTRACE
+              PrintCarValuesWithIMU: -DENABLE_EXTRA_NON_PLOTTER_OUTPUT -DTRACE
+              SmartCarFollower: -DMOTOR_SHIELD_2WD_BASIC_CONFIGURATION -DUSE_MPU6050_IMU -DUSE_ENCODER_MOTOR_CONTROL -DUSE_IR_REMOTE -DTRACE
+              RobotCarBlueDisplay:
+                -DBLUETOOTH_BAUD_RATE=BAUD_115200
+                -DBREADBOARD_4WD_FULL_CONFIGURATION
+                -DUS_SENSOR_SUPPORTS_1_PIN_MODE
+
+          - arduino-boards-fqbn: esp32:esp32:esp32cam
+            platform-url: https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+            required-libraries: ESP32Servo
+            sketches-exclude: PrintMotorDiagram,PrintCarValuesWithIMU,RobotCarBlueDisplay,LineFollower  # no Encoder support yet, no sensor input
+            build-properties: # the flags were put in compiler.cpp.extra_flags
+              All: -DCAR_IS_ESP32_CAM_BASED -MMD -c # see https://github.com/espressif/arduino-esp32/issues/8815
+              MecanumWheelCar: -DDUMMY -MMD -c # this undefines CAR_IS_ESP32_CAM_BASED
+
+#      fail-fast: false # false -> do not cancel all jobs / architectures if one job fails
+
+    # This is the list of steps this job will run.
+    steps:
+
+      # First of all, we clone the repo using the `checkout` action.
+      - name: Checkout
+        uses: actions/checkout@master
+
+      - name: Checkout new BlueDisplay
+        uses: actions/checkout@master
+        with:
+          repository: ArminJo/Arduino-BlueDisplay
+          ref: master
+          path: CustomBlueDisplay # must contain string "Custom"
+          # No need to put this custom library in the required-libraries list
+
+      - name: Compile all examples using the arduino-test-compile action
+        uses: ArminJo/arduino-test-compile@master
+        with:
+          arduino-board-fqbn: ${{ matrix.arduino-boards-fqbn }}
+          platform-url: ${{ matrix.platform-url }}
+          required-libraries: ${{ env.REQUIRED_LIBRARIES }},${{ matrix.required-libraries }}
+          sketches-exclude: ${{ matrix.sketches-exclude }}
+          build-properties: ${{ toJson(matrix.build-properties) }}
+          extra-arduino-lib-install-args: "--no-deps" # suppress dependency resolving for libraries, here the "Adafruit Motor Shield V2 Library"
+#          debug-install: true
+#          debug-compile: true
